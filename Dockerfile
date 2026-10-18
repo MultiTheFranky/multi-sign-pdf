@@ -7,6 +7,7 @@ COPY public ./public
 COPY src ./src
 COPY server ./server
 COPY test ./test
+COPY test-support ./test-support
 RUN npm test && npm run build
 
 FROM node:22-alpine AS dependencies

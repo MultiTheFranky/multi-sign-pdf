@@ -44,8 +44,9 @@ export function createApp({
     limits: {
       fileSize: 10 * 1024 * 1024,
       files: 10,
-      fields: 0,
-      parts: 10,
+      fields: 1,
+      fieldSize: 48 * 1024,
+      parts: 11,
     },
   }).array("files", 10);
   const controller = pdfController(store);

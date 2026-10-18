@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowUpRight, Check, CheckCheck, FileText, FolderOpen,
   LoaderCircle, Plus, ShieldCheck, Signature, Trash2, Upload, X, CircleAlert } from 'lucide-react';
 import JSZip from 'jszip';
-import { signHashes } from './autofirma.js';
+import { withSigningCertificate } from './autofirma.js';
 import './styles.css';
 
 const MAX_FILES = 50;
@@ -33,6 +33,10 @@ export default function BatchSigner() {
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState('');
   const [previewId, setPreviewId] = useState(null);
+  const [visibleSignature, setVisibleSignature] = useState(true);
+  const [useExistingSignatureBox, setUseExistingSignatureBox] = useState(true);
+  const [signaturePage, setSignaturePage] = useState('last');
+  const [signaturePosition, setSignaturePosition] = useState('bottom-right');
   const fileInput = useRef(null);
   const folderInput = useRef(null);
   const busyRef = useRef(false);
@@ -104,13 +108,18 @@ export default function BatchSigner() {
     controller.current = new AbortController();
     const signal = controller.current.signal;
     const prepared = [];
+    for (const item of pending) patchItem(item.id, { status: 'Firmando', error: '' });
     try {
+      await withSigningCertificate(async ({ certificateBase64, sign }) => {
       for (const item of pending) {
         if (!alive.current) return;
         patchItem(item.id, { status: 'Preparando', error: '' });
         try {
           const form = new FormData();
           form.append('files', item.file);
+          if (visibleSignature) form.append('visibleSignature', JSON.stringify({
+            certificateBase64, page: signaturePage, position: signaturePosition, useExisting: useExistingSignatureBox,
+          }));
           const response = await apiResponse(await fetch('/api/pdf/prepare', { method: 'POST', body: form, signal }));
           const documents = await response.json();
           if (documents.length !== 1 || !documents[0].documentId || !documents[0].hashBase64) throw new Error('Respuesta de preparacion incorrecta.');
@@ -121,7 +130,7 @@ export default function BatchSigner() {
       }
       if (!prepared.length || !alive.current) return;
       for (const document of prepared) patchItem(document.itemId, { status: 'Firmando' });
-      const signatures = await signHashes(prepared);
+      const signatures = await sign(prepared);
       for (const signature of signatures) {
         if (!alive.current) return;
         const document = prepared.find(entry => entry.documentId === signature.documentId);
@@ -140,8 +149,10 @@ export default function BatchSigner() {
           patchItem(document.itemId, { status: 'Error', error: error.message });
         }
       }
+      });
     } catch (error) {
-      for (const document of prepared) patchItem(document.itemId, { status: 'Error', error: error.message });
+      const affected = prepared.length ? prepared.map(document => document.itemId) : pending.map(item => item.id);
+      for (const id of affected) patchItem(id, { status: 'Error', error: error.message });
       if (alive.current) setNotice(error.message);
     } finally {
       busyRef.current = false;
@@ -200,8 +211,17 @@ export default function BatchSigner() {
             <h2>Resumen del lote</h2>
             <div className="summary-number">{String(items.length).padStart(2, '0')}<span>documentos</span></div>
             <dl className="summary-details"><div><dt>Formato</dt><dd>PDF / PAdES</dd></div><div><dt>Certificado</dt><dd>AutoFirma <ArrowUpRight size={12} /></dd></div><div><dt>Algoritmo</dt><dd>SHA-256</dd></div></dl>
+            <form id="signature-settings" className="signature-settings" aria-label="Apariencia de la firma" onSubmit={event => { event.preventDefault(); signDocuments(); }}>
+              <label className="signature-toggle"><input type="checkbox" checked={visibleSignature} disabled={busy} onChange={event => setVisibleSignature(event.target.checked)} /><span>Firma visible</span></label>
+              <fieldset disabled={busy || !visibleSignature} className="signature-fields">
+                <label className="signature-existing"><input type="checkbox" checked={useExistingSignatureBox} onChange={event => setUseExistingSignatureBox(event.target.checked)} /><span>Usar casilla del PDF</span></label>
+                <label htmlFor="signature-page">Pagina alternativa<select id="signature-page" value={signaturePage} onChange={event => setSignaturePage(event.target.value)}><option value="last">Ultima pagina</option><option value="first">Primera pagina</option></select></label>
+                <label htmlFor="signature-position">Posicion alternativa<select id="signature-position" value={signaturePosition} onChange={event => setSignaturePosition(event.target.value)}><option value="bottom-right">Abajo, derecha</option><option value="bottom-left">Abajo, izquierda</option><option value="top-right">Arriba, derecha</option><option value="top-left">Arriba, izquierda</option></select></label>
+              </fieldset>
+              {visibleSignature && <div className="signature-box-preview" aria-label="Aspecto de la firma visible"><strong>FIRMA ELECTRONICA</strong><span>DNI/NIE: Certificado de AutoFirma</span><span>Fecha: Automatica (UTC)</span></div>}
+            </form>
             <div className="completion"><div><span>Finalizados</span><strong aria-live="polite">{completed.length} / {items.length}</strong></div><progress aria-label="Documentos finalizados" value={completed.length} max={items.length || 1} /></div>
-            <button className="primary sign-button" disabled={busy || !items.length || completed.length === items.length} onClick={signDocuments}>{busy ? <LoaderCircle className="spin" size={18} /> : <Signature size={18} />}{busy ? 'Firma en curso' : 'Firmar Documentos'}</button>
+            <button type="submit" form="signature-settings" className="primary sign-button" disabled={busy || !items.length || completed.length === items.length}>{busy ? <LoaderCircle className="spin" size={18} /> : <Signature size={18} />}{busy ? 'Firma en curso' : 'Firmar Documentos'}</button>
             <button className="secondary" disabled={!completed.length || zipping} onClick={downloadZip}>{zipping ? <LoaderCircle className="spin" size={17} /> : <ArrowDownToLine size={17} />} Descargar firmados <span className="zip-label">ZIP</span></button>
             <div className="security-note"><ShieldCheck size={17} /><span>Clave privada en tu dispositivo</span></div>
             <div className="batch-seal"><CheckCheck size={22} strokeWidth={1.3} /><span>PLIEGO<span>DOCUMENTOS DIGITALES</span></span></div>

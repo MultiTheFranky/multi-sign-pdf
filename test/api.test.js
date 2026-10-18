@@ -1,10 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { webcrypto, createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import * as asn1js from "asn1js";
 import {
-  Certificate,
-  AttributeTypeAndValue,
   ContentInfo,
   SignedData,
   SignerInfo,
@@ -13,43 +11,26 @@ import {
   Attribute,
 } from "pkijs";
 import request from "supertest";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, PDFName, PDFString } from "pdf-lib";
 import { createApp } from "../server/app.js";
 import { DocumentStore } from "../server/store.js";
 import { signedBytes, preparePdf } from "../server/pdf.js";
 import { OIDS, verifyCms, decodeSignature } from "../server/cms.js";
+import { certificateBase64, testIdentity } from "../test-support/certificate.js";
 
-async function samplePdf() {
+async function samplePdf({ signatureBox = false } = {}) {
   const pdf = await PDFDocument.create();
-  pdf.addPage().drawText("Factura 2026");
+  const page = pdf.addPage();
+  page.drawText("Factura 2026");
+  if (signatureBox) {
+    const form = pdf.getForm();
+    const field = pdf.context.obj({ Type: "Annot", Subtype: "Widget", FT: "Sig",
+      T: PDFString.of("Firma original"), Rect: [50, 100, 230, 145], F: 4, P: page.ref });
+    const ref = pdf.context.register(field);
+    page.node.addAnnot(ref);
+    form.acroForm.addField(ref);
+  }
   return Buffer.from(await pdf.save());
-}
-
-async function testIdentity() {
-  const keys = await webcrypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
-    true,
-    ["sign", "verify"],
-  );
-  const certificate = new Certificate();
-  certificate.version = 2;
-  certificate.serialNumber = new asn1js.Integer({ value: 1 });
-  const commonName = new AttributeTypeAndValue({
-    type: "2.5.4.3",
-    value: new asn1js.Utf8String({ value: "Solo pruebas" }),
-  });
-  certificate.issuer.typesAndValues.push(commonName);
-  certificate.subject.typesAndValues.push(commonName);
-  certificate.notBefore.value = new Date(Date.now() - 60000);
-  certificate.notAfter.value = new Date(Date.now() + 3600000);
-  await certificate.subjectPublicKeyInfo.importKey(keys.publicKey);
-  await certificate.sign(keys.privateKey, "SHA-256");
-  return { keys, certificate };
 }
 
 async function signCms(
@@ -131,15 +112,20 @@ async function signCms(
 test("flujo HTTP completo, CMS real, firma de otro PDF y consumo unico", async () => {
   const { app, store } = createApp();
   try {
+    const identity = await testIdentity();
     const prepared = await request(app)
       .post("/api/pdf/prepare")
-      .attach("files", await samplePdf(), "factura.pdf")
+      .field("visibleSignature", JSON.stringify({ certificateBase64: certificateBase64(identity), page: "last", position: "bottom-right" }))
+      .attach("files", await samplePdf({ signatureBox: true }), "factura.pdf")
       .expect(201);
     const { documentId, hashBase64 } = prepared.body[0];
     assert.equal(Buffer.from(hashBase64, "base64").length, 32);
     const document = store.get(documentId);
-    const identity = await testIdentity();
     const cms = await signCms(document, identity);
+    const changedCertificate = await signCms(document, await testIdentity());
+    const mismatched = await request(app).post("/api/pdf/inject")
+      .send({ documentId, signatureBase64: changedCertificate.toString("base64") }).expect(422);
+    assert.match(mismatched.body.error, /no coincide/);
     const other = await preparePdf(await samplePdf());
     other.buffer[20] ^= 1;
     const wrongCms = await signCms(other, identity);
@@ -155,6 +141,11 @@ test("flujo HTTP completo, CMS real, firma de otro PDF y consumo unico", async (
     assert.match(signed.headers["content-type"], /application\/pdf/);
     assert.equal(signed.body.length, document.buffer.length);
     await verifyCms(cms, { ...document, buffer: signed.body });
+    const signedPdf = await PDFDocument.load(signed.body);
+    assert.equal(signedPdf.getForm().getFields().length, 1);
+    const widget = signedPdf.getForm().getSignature("Firma original").acroField.getWidgets()[0];
+    assert.equal(widget.getRectangle().width, 180);
+    assert.equal(widget.getRectangle().height, 45);
     await request(app)
       .post("/api/pdf/inject")
       .send({ documentId, signatureBase64: cms.toString("base64") })
@@ -218,4 +209,22 @@ test("lote atomico, limites del almacen, caducidad y origen", async () => {
   } finally {
     store.close();
   }
+});
+
+test("preparacion valida el campo JSON de firma visible sin guardar entradas invalidas", async () => {
+  const { app, store } = createApp();
+  try {
+    const input = await samplePdf();
+    const selectedCertificate = certificateBase64(await testIdentity());
+    for (const value of ["{", "null", JSON.stringify({ dni: "" }),
+      JSON.stringify({ certificateBase64: selectedCertificate, position: "outside" })]) {
+      await request(app).post("/api/pdf/prepare")
+        .field("visibleSignature", value).attach("files", input, "documento.pdf").expect(400);
+    }
+    assert.equal(store.documents.size, 0);
+    const response = await request(app).post("/api/pdf/prepare")
+      .attach("files", input, "invisible.pdf").expect(201);
+    const pdf = await PDFDocument.load(store.get(response.body[0].documentId).buffer);
+    assert.equal(pdf.getForm().getSignature("Signature1").acroField.getWidgets()[0].getRectangle().width, 0);
+  } finally { store.close(); }
 });

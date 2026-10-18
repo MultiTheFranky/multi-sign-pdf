@@ -8,6 +8,7 @@ import {
   setEngine,
 } from "pkijs";
 import { SIGNATURE_BYTES, signedBytes } from "./pdf.js";
+import { certificateFingerprint } from "./certificate.js";
 
 setEngine(
   "node",
@@ -91,6 +92,10 @@ export async function verifyCms(signature, document) {
     const now = new Date();
     if (now < certificate.notBefore.value || now > certificate.notAfter.value) {
       throw new Error("El certificado esta caducado o aun no es valido.");
+    }
+    if (document.signerCertificateFingerprint &&
+        certificateFingerprint(certificate) !== document.signerCertificateFingerprint) {
+      throw new Error("El certificado firmante no coincide con el usado en la firma visible.");
     }
     const attributes = signer.signedAttrs.attributes.filter(
       (attribute) => attribute.type === OIDS.signingCertificateV2,

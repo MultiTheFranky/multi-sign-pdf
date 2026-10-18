@@ -1,5 +1,6 @@
 import { preparePdf, injectPdf } from "../pdf.js";
 import { decodeSignature, verifyCms } from "../cms.js";
+import { validateVisibleSignature } from "../signature-appearance.js";
 
 export function pdfController(store) {
   return {
@@ -8,10 +9,23 @@ export function pdfController(store) {
         return response
           .status(400)
           .json({ error: "Adjunta PDFs en el campo files." });
+      let visibleSignature;
+      try {
+        if (Object.keys(request.body ?? {}).some(key => key !== "visibleSignature")) {
+          throw new Error("Campo de formulario no admitido.");
+        }
+        const raw = request.body?.visibleSignature;
+        if (raw !== undefined) {
+          if (typeof raw !== "string") throw new Error("visibleSignature debe ser un unico campo JSON.");
+          visibleSignature = validateVisibleSignature(JSON.parse(raw));
+        }
+      } catch (error) {
+        return response.status(400).json({ error: `Firma visible no valida: ${error.message}` });
+      }
       const documents = [];
       try {
         for (const file of request.files) {
-          const prepared = await preparePdf(file.buffer);
+          const prepared = await preparePdf(file.buffer, { visibleSignature });
           documents.push({
             ...prepared,
             filename: file.originalname.replace(/[\r\n]/g, ""),
