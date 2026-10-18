@@ -1,8 +1,19 @@
 import { createHash } from "node:crypto";
-import { PDFArray, PDFDocument, PDFName, PDFNull, PDFNumber, PDFSignature, PDFString } from "pdf-lib";
+import {
+  PDFArray,
+  PDFDocument,
+  PDFName,
+  PDFNull,
+  PDFNumber,
+  PDFSignature,
+  PDFString,
+} from "pdf-lib";
 import placeholder from "@signpdf/placeholder-pdf-lib";
 import signUtils from "@signpdf/utils";
-import { createSignatureAppearance, validateVisibleSignature } from "./signature-appearance.js";
+import {
+  createSignatureAppearance,
+  validateVisibleSignature,
+} from "./signature-appearance.js";
 
 const { pdflibAddPlaceholder } = placeholder;
 const { findByteRange } = signUtils;
@@ -18,16 +29,33 @@ function findSignatureBox(pdf, fields) {
       const widgets = field.acroField.getWidgets();
       if (widgets.length !== 1) continue;
       const widget = widgets[0];
-      if (!annotations.asArray().some(ref => pdf.context.lookup(ref) === widget.dict)) continue;
+      if (
+        !annotations
+          .asArray()
+          .some((ref) => pdf.context.lookup(ref) === widget.dict)
+      )
+        continue;
       const flags = widget.dict.lookup(PDFName.of("F"))?.asNumber?.() ?? 0;
       if (flags & (1 | 2 | 32)) continue;
       const { x, y, width, height } = widget.getRectangle();
-      if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) continue;
+      if (
+        ![x, y, width, height].every(Number.isFinite) ||
+        width <= 0 ||
+        height <= 0
+      )
+        continue;
       const rotated = page.getRotation().angle % 180 !== 0;
       const viewWidth = rotated ? height : width;
       const viewHeight = rotated ? width : height;
-      if (viewWidth < 120 || viewHeight < 36 || x < crop.x || y < crop.y ||
-          x + width > crop.x + crop.width || y + height > crop.y + crop.height) continue;
+      if (
+        viewWidth < 120 ||
+        viewHeight < 36 ||
+        x < crop.x ||
+        y < crop.y ||
+        x + width > crop.x + crop.width ||
+        y + height > crop.y + crop.height
+      )
+        continue;
       return { field, widget, page, rect: [x, y, x + width, y + height] };
     }
   }
@@ -43,11 +71,17 @@ export async function preparePdf(input, { visibleSignature } = {}) {
   if (!pdf.getPageCount()) throw new Error("El PDF no contiene paginas.");
   const form = pdf.getForm();
   const formFields = form.getFields();
-  const signatureFields = formFields.filter(field => field instanceof PDFSignature);
+  const signatureFields = formFields.filter(
+    (field) => field instanceof PDFSignature,
+  );
   for (const field of signatureFields) {
-    const value = pdf.context.lookup(field.acroField.getInheritableAttribute(PDFName.of("V")));
+    const value = pdf.context.lookup(
+      field.acroField.getInheritableAttribute(PDFName.of("V")),
+    );
     if (value && value !== PDFNull) {
-      throw new Error("No se admiten PDFs con firmas previas o campos de firma ya rellenados.");
+      throw new Error(
+        "No se admiten PDFs con firmas previas o campos de firma ya rellenados.",
+      );
     }
   }
   for (const [, object] of pdf.context.enumerateIndirectObjects()) {
@@ -58,10 +92,16 @@ export async function preparePdf(input, { visibleSignature } = {}) {
     }
   }
   const signingTime = new Date();
-  const existing = visible?.useExisting !== false && visible ? findSignatureBox(pdf, signatureFields) : undefined;
-  const stamp = visible ? await createSignatureAppearance(pdf, visible, signingTime, existing) : undefined;
+  const existing =
+    visible?.useExisting !== false && visible
+      ? findSignatureBox(pdf, signatureFields)
+      : undefined;
+  const stamp = visible
+    ? await createSignatureAppearance(pdf, visible, signingTime, existing)
+    : undefined;
   const originalFields = form.acroForm.Fields();
-  if (originalFields) form.acroForm.dict.set(PDFName.of("Fields"), originalFields);
+  if (originalFields)
+    form.acroForm.dict.set(PDFName.of("Fields"), originalFields);
   pdflibAddPlaceholder({
     pdfDoc: pdf,
     pdfPage: stamp?.page,
@@ -79,15 +119,19 @@ export async function preparePdf(input, { visibleSignature } = {}) {
   const createdRef = annotations.get(annotations.size() - 1);
   const createdWidget = pdf.context.lookup(createdRef);
   if (existing) {
-    existing.field.acroField.dict.set(PDFName.of("V"), createdWidget.get(PDFName.of("V")));
+    existing.field.acroField.dict.set(
+      PDFName.of("V"),
+      createdWidget.get(PDFName.of("V")),
+    );
     annotations.remove(annotations.size() - 1);
     const fields = form.acroForm.Fields();
     const createdIndex = fields.indexOf(createdRef);
-    if (createdIndex === undefined) throw new Error("No se pudo reutilizar el campo de firma existente.");
+    if (createdIndex === undefined)
+      throw new Error("No se pudo reutilizar el campo de firma existente.");
     fields.remove(createdIndex);
     pdf.context.delete(createdRef);
   } else {
-    const names = new Set(formFields.map(field => field.getName()));
+    const names = new Set(formFields.map((field) => field.getName()));
     let suffix = 1;
     while (names.has(`Signature${suffix}`)) suffix++;
     createdWidget.set(PDFName.of("T"), PDFString.of(`Signature${suffix}`));
@@ -96,7 +140,10 @@ export async function preparePdf(input, { visibleSignature } = {}) {
     const widget = existing?.widget.dict ?? createdWidget;
     widget.set(PDFName.of("AP"), pdf.context.obj({ N: stamp.appearanceRef }));
     widget.delete(PDFName.of("AS"));
-    widget.set(PDFName.of("F"), PDFNumber.of((widget.lookup(PDFName.of("F"))?.asNumber?.() ?? 0) | 4));
+    widget.set(
+      PDFName.of("F"),
+      PDFNumber.of((widget.lookup(PDFName.of("F"))?.asNumber?.() ?? 0) | 4),
+    );
   }
   const buffer = Buffer.from(await pdf.save({ useObjectStreams: false }));
   const { byteRangePlaceholder } = findByteRange(buffer);
@@ -133,8 +180,14 @@ export async function preparePdf(input, { visibleSignature } = {}) {
   );
   // El hash se calcula DESPUES de fijar ByteRange. Nunca se vuelve a guardar con pdf-lib.
   const hashBase64 = hashPdf(buffer, byteRange).toString("base64");
-  return { buffer, byteRange, contentsStart, contentsEnd, hashBase64,
-    signerCertificateFingerprint: visible?.certificateFingerprint };
+  return {
+    buffer,
+    byteRange,
+    contentsStart,
+    contentsEnd,
+    hashBase64,
+    signerCertificateFingerprint: visible?.certificateFingerprint,
+  };
 }
 
 export function hashPdf(buffer, byteRange) {

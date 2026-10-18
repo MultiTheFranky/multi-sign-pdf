@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
-import { normalizeBatchResult, signHashes, withSigningCertificate } from "../src/autofirma.js";
+import {
+  normalizeBatchResult,
+  signHashes,
+  withSigningCertificate,
+} from "../src/autofirma.js";
 
 test("biblioteca oficial integra, script clasico y configuracion local", () => {
   const source = readFileSync(
@@ -120,40 +124,68 @@ test("cancelacion y restauracion del modo local", async () => {
 
 test("selecciona un certificado antes de preparar y fija el mismo para todo el lote", async () => {
   const calls = [];
-  globalThis.window = { AutoScript: {
-    setStickySignatory: value => calls.push(["sticky", value]),
-    selectCertificate: (_params, success) => { calls.push(["select"]); success("Y2VydA=="); },
-    setLocalBatchProcess: value => calls.push(["local", value]),
-    createBatch() {}, addDocumentToBatch() {},
-    signBatchProcess: (_stop, _pre, _post, filters, success) => {
-      calls.push(["sign", filters]);
-      success({ signs: [{ id: "one", result: "DONE_AND_SAVED", signature: "Y21z" }] });
+  globalThis.window = {
+    AutoScript: {
+      setStickySignatory: (value) => calls.push(["sticky", value]),
+      selectCertificate: (_params, success) => {
+        calls.push(["select"]);
+        success("Y2VydA==");
+      },
+      setLocalBatchProcess: (value) => calls.push(["local", value]),
+      createBatch() {},
+      addDocumentToBatch() {},
+      signBatchProcess: (_stop, _pre, _post, filters, success) => {
+        calls.push(["sign", filters]);
+        success({
+          signs: [{ id: "one", result: "DONE_AND_SAVED", signature: "Y21z" }],
+        });
+      },
     },
-  } };
+  };
   try {
-    await withSigningCertificate(async session => {
+    await withSigningCertificate(async (session) => {
       assert.equal(session.certificateBase64, "Y2VydA==");
-      assert.equal(calls.filter(call => call[0] === "select").length, 1);
+      assert.equal(calls.filter((call) => call[0] === "select").length, 1);
       await assert.rejects(signHashes([]), /en curso/);
-      const results = await session.sign([{ documentId: "one", hashBase64: "aGFzaA==" }]);
+      const results = await session.sign([
+        { documentId: "one", hashBase64: "aGFzaA==" },
+      ]);
       assert.equal(results[0].signatureBase64, "Y21z");
     });
-    assert.deepEqual(calls.find(call => call[0] === "sign"), ["sign", "filters=encodedcert:Y2VydA==\nheadless=true"]);
+    assert.deepEqual(
+      calls.find((call) => call[0] === "sign"),
+      ["sign", "filters=encodedcert:Y2VydA==\nheadless=true"],
+    );
     assert.deepEqual(calls.at(-1), ["sticky", false]);
-  } finally { delete globalThis.window; }
+  } finally {
+    delete globalThis.window;
+  }
 });
 
 test("cancelar el certificado no prepara PDFs y libera la seleccion fijada", async () => {
   const sticky = [];
-  globalThis.window = { MiniApplet: {
-    setStickySignatory: value => sticky.push(value),
-    selectCertificate: (_params, _success, failure) => failure("AOCancelledOperationException", "cancelado"),
-    setLocalBatchProcess() {}, createBatch() {}, addDocumentToBatch() {}, signBatchProcess() {},
-  } };
+  globalThis.window = {
+    MiniApplet: {
+      setStickySignatory: (value) => sticky.push(value),
+      selectCertificate: (_params, _success, failure) =>
+        failure("AOCancelledOperationException", "cancelado"),
+      setLocalBatchProcess() {},
+      createBatch() {},
+      addDocumentToBatch() {},
+      signBatchProcess() {},
+    },
+  };
   let prepared = false;
   try {
-    await assert.rejects(withSigningCertificate(() => { prepared = true; }), { name: "AbortError" });
+    await assert.rejects(
+      withSigningCertificate(() => {
+        prepared = true;
+      }),
+      { name: "AbortError" },
+    );
     assert.equal(prepared, false);
     assert.deepEqual(sticky, [false, true, false]);
-  } finally { delete globalThis.window; }
+  } finally {
+    delete globalThis.window;
+  }
 });

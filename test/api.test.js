@@ -16,7 +16,10 @@ import { createApp } from "../server/app.js";
 import { DocumentStore } from "../server/store.js";
 import { signedBytes, preparePdf } from "../server/pdf.js";
 import { OIDS, verifyCms, decodeSignature } from "../server/cms.js";
-import { certificateBase64, testIdentity } from "../test-support/certificate.js";
+import {
+  certificateBase64,
+  testIdentity,
+} from "../test-support/certificate.js";
 
 async function samplePdf({ signatureBox = false } = {}) {
   const pdf = await PDFDocument.create();
@@ -24,8 +27,15 @@ async function samplePdf({ signatureBox = false } = {}) {
   page.drawText("Factura 2026");
   if (signatureBox) {
     const form = pdf.getForm();
-    const field = pdf.context.obj({ Type: "Annot", Subtype: "Widget", FT: "Sig",
-      T: PDFString.of("Firma original"), Rect: [50, 100, 230, 145], F: 4, P: page.ref });
+    const field = pdf.context.obj({
+      Type: "Annot",
+      Subtype: "Widget",
+      FT: "Sig",
+      T: PDFString.of("Firma original"),
+      Rect: [50, 100, 230, 145],
+      F: 4,
+      P: page.ref,
+    });
     const ref = pdf.context.register(field);
     page.node.addAnnot(ref);
     form.acroForm.addField(ref);
@@ -115,7 +125,14 @@ test("flujo HTTP completo, CMS real, firma de otro PDF y consumo unico", async (
     const identity = await testIdentity();
     const prepared = await request(app)
       .post("/api/pdf/prepare")
-      .field("visibleSignature", JSON.stringify({ certificateBase64: certificateBase64(identity), page: "last", position: "bottom-right" }))
+      .field(
+        "visibleSignature",
+        JSON.stringify({
+          certificateBase64: certificateBase64(identity),
+          page: "last",
+          position: "bottom-right",
+        }),
+      )
       .attach("files", await samplePdf({ signatureBox: true }), "factura.pdf")
       .expect(201);
     const { documentId, hashBase64 } = prepared.body[0];
@@ -123,8 +140,13 @@ test("flujo HTTP completo, CMS real, firma de otro PDF y consumo unico", async (
     const document = store.get(documentId);
     const cms = await signCms(document, identity);
     const changedCertificate = await signCms(document, await testIdentity());
-    const mismatched = await request(app).post("/api/pdf/inject")
-      .send({ documentId, signatureBase64: changedCertificate.toString("base64") }).expect(422);
+    const mismatched = await request(app)
+      .post("/api/pdf/inject")
+      .send({
+        documentId,
+        signatureBase64: changedCertificate.toString("base64"),
+      })
+      .expect(422);
     assert.match(mismatched.body.error, /no coincide/);
     const other = await preparePdf(await samplePdf());
     other.buffer[20] ^= 1;
@@ -143,7 +165,10 @@ test("flujo HTTP completo, CMS real, firma de otro PDF y consumo unico", async (
     await verifyCms(cms, { ...document, buffer: signed.body });
     const signedPdf = await PDFDocument.load(signed.body);
     assert.equal(signedPdf.getForm().getFields().length, 1);
-    const widget = signedPdf.getForm().getSignature("Firma original").acroField.getWidgets()[0];
+    const widget = signedPdf
+      .getForm()
+      .getSignature("Firma original")
+      .acroField.getWidgets()[0];
     assert.equal(widget.getRectangle().width, 180);
     assert.equal(widget.getRectangle().height, 45);
     await request(app)
@@ -216,15 +241,38 @@ test("preparacion valida el campo JSON de firma visible sin guardar entradas inv
   try {
     const input = await samplePdf();
     const selectedCertificate = certificateBase64(await testIdentity());
-    for (const value of ["{", "null", JSON.stringify({ dni: "" }),
-      JSON.stringify({ certificateBase64: selectedCertificate, position: "outside" })]) {
-      await request(app).post("/api/pdf/prepare")
-        .field("visibleSignature", value).attach("files", input, "documento.pdf").expect(400);
+    for (const value of [
+      "{",
+      "null",
+      JSON.stringify({ dni: "" }),
+      JSON.stringify({
+        certificateBase64: selectedCertificate,
+        position: "outside",
+      }),
+    ]) {
+      await request(app)
+        .post("/api/pdf/prepare")
+        .field("visibleSignature", value)
+        .attach("files", input, "documento.pdf")
+        .expect(400);
     }
     assert.equal(store.documents.size, 0);
-    const response = await request(app).post("/api/pdf/prepare")
-      .attach("files", input, "invisible.pdf").expect(201);
-    const pdf = await PDFDocument.load(store.get(response.body[0].documentId).buffer);
-    assert.equal(pdf.getForm().getSignature("Signature1").acroField.getWidgets()[0].getRectangle().width, 0);
-  } finally { store.close(); }
+    const response = await request(app)
+      .post("/api/pdf/prepare")
+      .attach("files", input, "invisible.pdf")
+      .expect(201);
+    const pdf = await PDFDocument.load(
+      store.get(response.body[0].documentId).buffer,
+    );
+    assert.equal(
+      pdf
+        .getForm()
+        .getSignature("Signature1")
+        .acroField.getWidgets()[0]
+        .getRectangle().width,
+      0,
+    );
+  } finally {
+    store.close();
+  }
 });

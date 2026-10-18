@@ -84,7 +84,11 @@ async function getClient() {
 
 function signingError(type, message, code) {
   const cancelled = /cancel/i.test(type || "") || code === "AS500001";
-  const error = new Error(cancelled ? "Firma cancelada por el usuario." : message || "No se pudo conectar con AutoFirma.");
+  const error = new Error(
+    cancelled
+      ? "Firma cancelada por el usuario."
+      : message || "No se pudo conectar con AutoFirma.",
+  );
   error.name = cancelled ? "AbortError" : "AutoFirmaError";
   return error;
 }
@@ -107,7 +111,9 @@ async function signBatch(client, documents, certificateBase64) {
         false,
         null,
         null,
-        certificateBase64 ? `filters=encodedcert:${certificateBase64}\nheadless=true` : "",
+        certificateBase64
+          ? `filters=encodedcert:${certificateBase64}\nheadless=true`
+          : "",
         resolve,
         (type, message, code) => reject(signingError(type, message, code)),
       );
@@ -123,7 +129,9 @@ export async function signHashes(documents) {
   signing = true;
   try {
     return await signBatch(await getClient(), documents);
-  } finally { signing = false; }
+  } finally {
+    signing = false;
+  }
 }
 
 export async function withSigningCertificate(operation) {
@@ -132,19 +140,36 @@ export async function withSigningCertificate(operation) {
   let client;
   try {
     client = await getClient();
-    if (typeof client.selectCertificate !== "function" || typeof client.setStickySignatory !== "function") {
-      throw new Error("La biblioteca de AutoFirma no permite seleccionar y fijar el certificado.");
+    if (
+      typeof client.selectCertificate !== "function" ||
+      typeof client.setStickySignatory !== "function"
+    ) {
+      throw new Error(
+        "La biblioteca de AutoFirma no permite seleccionar y fijar el certificado.",
+      );
     }
     client.setStickySignatory(false);
     client.setStickySignatory(true);
     const certificateBase64 = await new Promise((resolve, reject) => {
-      client.selectCertificate("", resolve, (type, message, code) => reject(signingError(type, message, code)));
+      client.selectCertificate("", resolve, (type, message, code) =>
+        reject(signingError(type, message, code)),
+      );
     });
-    if (typeof certificateBase64 !== "string" || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(certificateBase64)) {
+    if (
+      typeof certificateBase64 !== "string" ||
+      !/^[A-Za-z0-9+/_-]+={0,2}$/.test(certificateBase64)
+    ) {
       throw new Error("AutoFirma no devolvio un certificado valido.");
     }
-    return await operation({ certificateBase64, sign: documents => signBatch(client, documents, certificateBase64) });
+    return await operation({
+      certificateBase64,
+      sign: (documents) => signBatch(client, documents, certificateBase64),
+    });
   } finally {
-    try { client?.setStickySignatory?.(false); } finally { signing = false; }
+    try {
+      client?.setStickySignatory?.(false);
+    } finally {
+      signing = false;
+    }
   }
 }

@@ -82,11 +82,9 @@ export function createApp({
   app.use((error, _request, response, _next) => {
     const status =
       error instanceof multer.MulterError ? 413 : error.status || 500;
-    response
-      .status(status)
-      .json({
-        error: status === 500 ? "Error interno del servidor." : error.message,
-      });
+    response.status(status).json({
+      error: status === 500 ? "Error interno del servidor." : error.message,
+    });
   });
   return { app, store };
 }
